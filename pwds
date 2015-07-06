@@ -1,0 +1,170 @@
+#!/usr/bin/env python
+import argparse
+import sys
+import os
+import json
+import re
+from getpass import getpass
+
+DEFAULT_FILES= [ './pwds.safe', os.path.join( os.environ[ 'HOME' ], 'pwds.safe' ) ]
+
+class PasswordEntry( object ):
+    def __init__( self, username=None, email=None, name=None, note=None, password=None ):
+        self.username=username
+        self.email=email
+        self.name=name
+        self.note=note
+        self.password = password
+
+    def __str__( self ):
+        return "%s: email:%s, Username:%s, Pass:%s, Note:%s" % \
+                ( self.name, self.username, self.email, self.password, self.note )
+
+    def matches( self, pattern, properties=None ):
+        if properties == None or len( properties ) == 0:
+            properties = [ 'username', 'email', 'name', 'note' ]
+
+        for p in properties:
+            if hasattr( self, p ):
+                if getattr( self, p ) is not None and re.search( pattern, getattr( self, p ) ):
+                    return True
+            else:
+                print 'No attribute %s' % p
+                quit()
+        return False
+
+def decodeEntry( obj ):
+    return PasswordEntry( username=obj['username'], email=obj['email'],
+                          name=obj['name'], note=obj['note'], password=obj['password'] )
+
+class EntryEncoder( json.JSONEncoder ):
+    def default( self, obj ):
+        return { 'username': obj.username,
+                 'email': obj.email,
+                 'name': obj.name,
+                 'note': obj.note,
+                 'password': obj.password }
+
+class PasswordManager( object ):
+
+    def __init__( self, passwords ):
+        self.passwords = passwords
+        if self.passwords is None:
+            self.passwords = []
+
+    def add( self, username=None, email=None, name=None, note=None ):
+        password = self.promptForPassword()
+        newpass = PasswordEntry( username=username, email=email, name=name,
+                                 note=note, password=password )
+        self.passwords.append( newpass )
+
+    def search( self, pattern, searchProps=None, sortProp=None ):
+        passes = [ ( i, self.passwords[ i ] ) for i in range( len( self.passwords ) ) \
+                   if pattern is None or self.passwords[ i ].matches( pattern,
+                                                                      properties=searchProps ) ]
+        if sortProp is not None and len( passes ) > 0:
+            if hasattr( passes[ 0 ][ 1 ], sortProp ):
+                passes.sort( key=lambda p: getattr( p[ 1 ], sortProp ) )
+            else:
+                print 'No attribute %s' % sortProp
+                quit()
+        return passes
+
+    def update( self, username=None, email=None, name=None, note=None, updatePassword=False ):
+        pass
+
+    def show( self, index=None, sortProp=None, pattern=None, searchProps=None ):
+        if index is None:
+            passes = self.search( sortProp=sortProp, pattern=pattern, searchProps=searchProps )
+            self.prettyPrintEntries( passes )
+        else:
+            if index >= 0 and index < len( self.passwords ):
+                self.prettyPrintEntries( [ ( index, self.passwords[ index ] ) ] )
+
+    def prettyPrintEntries( self, indexEntryTuples ):
+        fmt = '%-3s %-15s %-15s %-25s %-15s %-15s'
+        header = fmt % ( '', 'name', 'username', 'email', 'password', 'note' )
+        print header
+        print '-' * len( header )
+        for i, e in indexEntryTuples:
+            print fmt % ( str( i ), e.name, e.username, e.email, e.password,
+                          e.note.replace( '\n', '\n' + ' ' * ( len( header ) - 15 ) ) \
+                                  if e.note is not None else None )
+
+    def promptForPassword( self ):
+        return getpass( prompt="Enter password: " )
+
+
+def main():
+    argparser = argparse.ArgumentParser( prog='pwds',
+            usage='%(prog)s COMMAND [ OPTIONS ]',
+            description='Manage passwords in a GPG file.' )
+    argparser.add_argument( 'command', metavar='COMMAND', type=str,
+                            help='The command to use: [ add | update | show | delete | help ]' )
+    argparser.add_argument( '--username', '-u', type=str,
+                            help='Provide a username' )
+    argparser.add_argument( '--email', '-e', type=str,
+                            help='Provide an account email' )
+    argparser.add_argument( '--name', '-n', type=str,
+                            help='Provide an service/platform name' )
+    argparser.add_argument( '--note', type=str,
+                            help='Provide a note such as Q/As' )
+    argparser.add_argument( '--index', '-i', type=int,
+                            help='Provide an service/platform name' )
+    argparser.add_argument( '--password', '-p', action='store_true',
+                            help='For update, change the password' )
+    argparser.add_argument( '--regex', '-r', metavar=('PATTERN', 'PROPERTIES'), type=str, nargs='+',
+                            help='A regular expression to search for a password to show or edit.'
+                                 ' Optional property names can also be provided to search.' )
+    argparser.add_argument( '--sort', '-s', type=str, metavar='PROPERTY',
+                            help='Sort show output by property name' )
+    argparser.add_argument( '--gen-pass', '-g', metavar='LENGTH', type=int, nargs='?', default=-1,
+                            help='Generate a password when adding or updating. '
+                                 'Default length is 50. Max length is 100' )
+    argparser.add_argument( '--file', '-f', metavar='FILENAME',
+                            help='A file to use for storing passwords. Defaults to '
+                                 './pwds.safe or ~/.pwds.safe, if they exist, or creates '
+                                 './pwds.safe if neither is found.' )
+
+    args = argparser.parse_args()
+    safeFile = getFilename( args.file )
+
+    passwords = getPasswords( safeFile )
+    passManager = PasswordManager( passwords )
+
+    if args.command == 'show':
+        pattern = args.regex[ 0 ] if args.regex is not None else None
+        searchProps = args.regex[ 1: ] if args.regex is not None else None
+        passManager.show( index=args.index, sortProp=args.sort, pattern=pattern,
+                          searchProps=searchProps )
+    elif args.command == 'add':
+        passManager.add( name=args.name, username=args.username, email=args.email, note=args.note )
+        writePasswords( passManager.passwords, safeFile )
+        print "Added password for %s" % args.name
+    else:
+        print 'Unrecognized command "%s"' % args.command
+
+def getFilename( filename ):
+    if filename != None:
+        return filename
+
+    for f in DEFAULT_FILES:
+        if os.path.isfile( f ):
+            return f
+
+    return DEFAULT_FILES[ 0 ]
+
+def getPasswords( filename ):
+    try:
+        with open( filename, 'r' ) as f:
+            passes = json.loads( f.read() )
+            return [ decodeEntry( o ) for o in passes ]
+    except IOError as e:
+        return []
+
+def writePasswords( pwds, filename ):
+    with open( filename, 'w' ) as f:
+        f.write( json.dumps( pwds, cls=EntryEncoder ) )
+
+if __name__ == '__main__':
+    main()
