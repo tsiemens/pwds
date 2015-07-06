@@ -16,6 +16,10 @@ class PasswordEntry( object ):
         self.note=note
         self.password = password
 
+    def copy( self ):
+        return PasswordEntry( username=self.username, email=self.email, name=self.name,
+                              note=self.note, password=self.password )
+
     def __str__( self ):
         return "%s: email:%s, Username:%s, Pass:%s, Note:%s" % \
                 ( self.name, self.username, self.email, self.password, self.note )
@@ -47,39 +51,74 @@ class EntryEncoder( json.JSONEncoder ):
 
 class PasswordManager( object ):
 
-    def __init__( self, passwords ):
-        self.passwords = passwords
-        if self.passwords is None:
-            self.passwords = []
+    def __init__( self, safeFile ):
+        self.safeFile = safeFile
+        self.passwords = self.loadPasswords()
 
     def add( self, username=None, email=None, name=None, note=None ):
-        password = self.promptForPassword()
+        password = promptForPassword()
         newpass = PasswordEntry( username=username, email=email, name=name,
                                  note=note, password=password )
         self.passwords.append( newpass )
+        self.writePasswords()
 
-    def search( self, pattern, searchProps=None, sortProp=None ):
-        passes = [ ( i, self.passwords[ i ] ) for i in range( len( self.passwords ) ) \
-                   if pattern is None or self.passwords[ i ].matches( pattern,
-                                                                      properties=searchProps ) ]
-        if sortProp is not None and len( passes ) > 0:
-            if hasattr( passes[ 0 ][ 1 ], sortProp ):
-                passes.sort( key=lambda p: getattr( p[ 1 ], sortProp ) )
-            else:
-                print 'No attribute %s' % sortProp
-                quit()
-        return passes
+    def loadPasswords( self ):
+        try:
+            with open( self.safeFile, 'r' ) as f:
+                passes = json.loads( f.read() )
+                return [ decodeEntry( o ) for o in passes ]
+        except IOError as e:
+            return []
 
-    def update( self, username=None, email=None, name=None, note=None, updatePassword=False ):
-        pass
+    def writePasswords( self ):
+        with open( self.safeFile, 'w' ) as f:
+            f.write( json.dumps( self.passwords, cls=EntryEncoder ) )
 
-    def show( self, index=None, sortProp=None, pattern=None, searchProps=None ):
-        if index is None:
-            passes = self.search( sortProp=sortProp, pattern=pattern, searchProps=searchProps )
-            self.prettyPrintEntries( passes )
-        else:
+    def getPasswords( self, index=None, pattern=None, searchProps=None, sortProp=None ):
+        if index is not None:
             if index >= 0 and index < len( self.passwords ):
-                self.prettyPrintEntries( [ ( index, self.passwords[ index ] ) ] )
+                return [ ( index, self.passwords[ index ] ) ]
+            else:
+                print "No password with index %d" % index
+        else:
+            passes = [ ( i, self.passwords[ i ] ) for i in range( len( self.passwords ) ) \
+                       if pattern is None or self.passwords[ i ].matches( pattern,
+                                                                          properties=searchProps ) ]
+            if sortProp is not None and len( passes ) > 0:
+                if hasattr( passes[ 0 ][ 1 ], sortProp ):
+                    passes.sort( key=lambda p: getattr( p[ 1 ], sortProp ) )
+                else:
+                    print 'No attribute %s' % sortProp
+                    quit()
+            return passes
+
+    def update( self, indexedEntryTuples, username=None, email=None, name=None,
+            note=None, updatePassword=False ):
+        print "Updating %d entries..." % len( indexedEntryTuples )
+        print "Before:"
+        self.prettyPrintEntries( indexedEntryTuples )
+
+        password = None
+        if updatePassword:
+            password = promptForPassword( prompt="Enter new password: " )
+
+        copy = []
+        for i, e in indexedEntryTuples:
+            ecopy = e.copy()
+            ecopy.name = ecopy.name if name == None else name
+            ecopy.username = ecopy.username if username == None else username
+            ecopy.email = ecopy.email if email == None else email
+            ecopy.note = ecopy.note if note == None else note
+            ecopy.password = ecopy.password if password == None else password
+            copy.append( ( i, ecopy ) )
+
+        print "\nAfter:"
+        self.prettyPrintEntries( copy )
+
+        if promptYesNo( "Are these changes ok?" ):
+            for orig, changed in zip( indexedEntryTuples, copy ):
+                self.passwords[ orig[ 0 ] ] = changed[ 1 ]
+            self.writePasswords()
 
     def prettyPrintEntries( self, indexEntryTuples ):
         fmt = '%-3s %-15s %-15s %-25s %-15s %-15s'
@@ -91,9 +130,26 @@ class PasswordManager( object ):
                           e.note.replace( '\n', '\n' + ' ' * ( len( header ) - 15 ) ) \
                                   if e.note is not None else None )
 
-    def promptForPassword( self ):
-        return getpass( prompt="Enter password: " )
+def promptYesNo( question ):
+    while True:
+        reply = str( raw_input( question + ' [y/n]: ' ) ).lower().strip()
+        if reply[ 0 ] == 'y':
+            return True
+        if reply[ 0 ] == 'n':
+            return False
 
+def promptForPassword( prompt="Enter password: " ):
+        return getpass( prompt=prompt )
+
+def getFilename( filename ):
+    if filename != None:
+        return filename
+
+    for f in DEFAULT_FILES:
+        if os.path.isfile( f ):
+            return f
+
+    return DEFAULT_FILES[ 0 ]
 
 def main():
     argparser = argparse.ArgumentParser( prog='pwds',
@@ -128,43 +184,30 @@ def main():
 
     args = argparser.parse_args()
     safeFile = getFilename( args.file )
+    passManager = PasswordManager( safeFile )
 
-    passwords = getPasswords( safeFile )
-    passManager = PasswordManager( passwords )
+    args.regex_pattern = args.regex[ 0 ] if args.regex is not None else None
+    args.regex_props = args.regex[ 1: ] if args.regex is not None else None
 
     if args.command == 'show':
-        pattern = args.regex[ 0 ] if args.regex is not None else None
-        searchProps = args.regex[ 1: ] if args.regex is not None else None
-        passManager.show( index=args.index, sortProp=args.sort, pattern=pattern,
-                          searchProps=searchProps )
+        passes = passManager.getPasswords( index=args.index, sortProp=args.sort,
+                                           pattern=args.regex_pattern,
+                                           searchProps=args.regex_props )
+        passManager.prettyPrintEntries( passes )
     elif args.command == 'add':
         passManager.add( name=args.name, username=args.username, email=args.email, note=args.note )
-        writePasswords( passManager.passwords, safeFile )
         print "Added password for %s" % args.name
+    elif args.command == 'update':
+        if args.index is None and args.regex_pattern is None:
+            print "Must provide --index or --regex for update"
+        else:
+            passes = passManager.getPasswords( index=args.index,
+                                               pattern=args.regex_pattern,
+                                               searchProps=args.regex_props )
+            passManager.update( passes, name=args.name, username=args.username, email=args.email,
+                                note=args.note, updatePassword=args.password )
     else:
         print 'Unrecognized command "%s"' % args.command
-
-def getFilename( filename ):
-    if filename != None:
-        return filename
-
-    for f in DEFAULT_FILES:
-        if os.path.isfile( f ):
-            return f
-
-    return DEFAULT_FILES[ 0 ]
-
-def getPasswords( filename ):
-    try:
-        with open( filename, 'r' ) as f:
-            passes = json.loads( f.read() )
-            return [ decodeEntry( o ) for o in passes ]
-    except IOError as e:
-        return []
-
-def writePasswords( pwds, filename ):
-    with open( filename, 'w' ) as f:
-        f.write( json.dumps( pwds, cls=EntryEncoder ) )
 
 if __name__ == '__main__':
     main()
