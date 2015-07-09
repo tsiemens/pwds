@@ -43,8 +43,7 @@ class PasswordEntry( object ):
                 if re.search( pattern, attr ):
                     return True
             else:
-                print 'No attribute %s' % p
-                quit()
+                raise AttributeError( 'Password entry has no attribute %s' % p )
         return False
 
 def decodeEntry( obj ):
@@ -72,52 +71,65 @@ def encrypt( password, text, safe ):
 def promptForPassword( prompt="Enter password: " ):
         return getpass( prompt=prompt )
 
-def getSafeDataAndPass( safeFilename ):
-    if os.path.isfile( safeFilename ):
-        password = promptForPassword( prompt="Enter password for %s: " % safeFilename )
-        return decrypt( password, safeFilename ), password
-    else:
-        while True:
-            password = promptForPassword( prompt="Enter new password for %s: " % safeFilename )
-            confPass = promptForPassword( prompt="Confirm password: " )
-            if password == confPass:
-                return '', password
-            else:
-                print 'Passwords did not match!'
+class AuthenticationError( Exception ):
+    def __init__( self, value ):
+        self.value = value
 
-def loadPasswordEntriesAndSafePass( safeFilename ):
-    data, password = getSafeDataAndPass( safeFilename )
-    if data is None or data == '':
-        writePasswords( [], safeFilename, password )
-        return [], password
-    else:
-        try:
-            passes = json.loads( data )
-            return [ decodeEntry( o ) for o in passes ], password
-        except IOError as e:
-            return [], password
-        except ValueError:
-            print( 'The dafe data could not be parsed. '
-                   'Use the dump command to recover the contents.' )
-            quit()
+    def __str__( self ):
+        return self.value
 
-def writePasswords( passwordEntries, safeFile, password ):
-    encrypt( password, json.dumps( passwordEntries, cls=EntryEncoder ), safeFile )
+class Safe( object ):
+    def __init__( self, filename ):
+        self.filename = filename
+        if os.path.isfile( filename ):
+            self.password = promptForPassword( prompt="Enter password for %s: " % filename )
+            self.rawData = decrypt( self.password, filename )
+            if self.rawData is None:
+                raise AuthenticationError( 'Password incorrect for %s' % filename )
+        else:
+            while True:
+                password = promptForPassword( prompt="Enter new password for %s: " % filename )
+                confPass = promptForPassword( prompt="Confirm password: " )
+                if password == confPass:
+                    self.password = password
+                    self.rawData = ''
+                    return
+                else:
+                    print 'Passwords did not match!'
+
+    def loadPasswordEntries( self ):
+        if self.rawData is None or self.rawData == '':
+            self.writePasswords( [] )
+            return []
+        else:
+            try:
+                passes = json.loads( self.rawData )
+                return [ decodeEntry( o ) for o in passes ]
+            except IOError as e:
+                return []
+            except ValueError:
+                return None
+
+    def writePasswords( self, passwordEntries ):
+        jsonStr = json.dumps( passwordEntries, cls=EntryEncoder )
+        encrypt( self.password, jsonStr, self.filename )
+        self.rawData = jsonStr
 
 class PasswordManager( object ):
 
     def __init__( self, passwords ):
         self.passwords = passwords
 
-    def add( self, username=None, email=None, name=None, note=None ):
+    def add( self, username=None, email=None, name=None, note=None, password=None ):
         """ Adds a new password. Returns True if successful """
-        password = promptForPassword( prompt='Enter password for %s: ' % name )
+        if not password:
+            password = promptForPassword( prompt='Enter password for %s: ' % name )
         newpass = PasswordEntry( username=username, email=email, name=name,
                                  note=note, password=password )
         self.passwords.append( newpass )
         return True
 
-    def getPasswords( self, index=None, pattern=None, searchProps=None, sortProp=None ):
+    def getIndexedPasswords( self, index=None, pattern=None, searchProps=None, sortProp=None ):
         if index is not None:
             if index >= 0 and index < len( self.passwords ):
                 return [ ( index, self.passwords[ index ] ) ]
@@ -131,19 +143,17 @@ class PasswordManager( object ):
                 if hasattr( passes[ 0 ][ 1 ], sortProp ):
                     passes.sort( key=lambda p: getattr( p[ 1 ], sortProp ) )
                 else:
-                    print 'No attribute %s' % sortProp
-                    quit()
+                    raise AttributeError( 'Password entry has no attribute %s' % p )
             return passes
 
     def update( self, indexedEntryTuples, username=None, email=None, name=None,
-            note=None, updatePassword=False ):
+            note=None, password=None, shouldPromptForPassword=False ):
         """ Updates the passwords. Returns True if successful """
         print "Updating %d entries..." % len( indexedEntryTuples )
         print "Before:"
         self.prettyPrintEntries( indexedEntryTuples )
 
-        password = None
-        if updatePassword:
+        if shouldPromptForPassword and password is None:
             password = promptForPassword( prompt="Enter new password: " )
 
         copy = []
@@ -166,6 +176,22 @@ class PasswordManager( object ):
         else:
             return False
 
+    def delete( self, indexesToDelete ):
+        toDelete = []
+        for i in range( len( self.passwords ) ):
+            if i in indexesToDelete:
+                toDelete.append( ( i, self.passwords[ i ] ) )
+
+        self.prettyPrintEntries( toDelete )
+
+        if promptYesNo( "Delete these entries?" ):
+            for i in range( len( self.passwords ), -1, -1 ):
+                if i in indexesToDelete:
+                    del self.passwords[ i ]
+            return True
+        else:
+            return False
+
     def prettyPrintEntries( self, indexEntryTuples ):
         fmt = '%-3s %-15s %-15s %-25s %-15s %-15s'
         header = fmt % ( '', 'name', 'username', 'email', 'password', 'note' )
@@ -184,10 +210,7 @@ def promptYesNo( question ):
         if reply[ 0 ] == 'n':
             return False
 
-def getFilename( filename ):
-    if filename != None:
-        return filename
-
+def getDefaultFilename():
     for f in DEFAULT_FILES:
         if os.path.isfile( f ):
             return f
@@ -198,6 +221,14 @@ def genKey( length ):
     """ Creates a random password """
     return base64.b64encode( os.urandom( 100 ) )[ :length ]
 
+def handleGenPass( gen_pass_val ):
+    if gen_pass_val == -1:
+        return None
+    elif gen_pass_val > 0 and gen_pass_val <= 100:
+        return genKey( gen_pass_val )
+    else:
+        raise ValueError( 'gen-pass value must be > 0 and <= 100' )
+
 def addEditParserArgs( parser ):
     parser.add_argument( '--username', '-u', type=str,
                          help='Provide a username' )
@@ -207,8 +238,6 @@ def addEditParserArgs( parser ):
                          help='Provide an service/platform name' )
     parser.add_argument( '--note', type=str,
                          help='Provide a note such as Q/As' )
-    parser.add_argument( '--password', '-p', action='store_true',
-                         help='For update, change the password' )
     parser.add_argument( '--gen-pass', '-g', metavar='LENGTH', type=int, nargs='?', default=-1,
                             help='Generate a password when adding or updating. '
                                  'Default length is 50. Max length is 100' )
@@ -221,44 +250,68 @@ def addSelectParserArgs( parser ):
                               ' Optional property names can also be provided to search.' )
 
 
-def cmd_show( args, passMgr ):
-    passes = passMgr.getPasswords( index=args.index, sortProp=args.sort,
-                                   pattern=args.regex_pattern,
-                                   searchProps=args.regex_props )
-    passMgr.prettyPrintEntries( passes )
+def cmd_show( args, passMgr, safe ):
+    if args.raw:
+        cmd_dump( args, passMgr, safe )
+    else:
+        passes = passMgr.getIndexedPasswords( index=args.index, sortProp=args.sort,
+                                       pattern=args.regex_pattern,
+                                       searchProps=args.regex_props )
+        passMgr.prettyPrintEntries( passes )
     return False, None
 
-def cmd_add( args, passMgr ):
-    success = passMgr.add( name=args.name, username=args.username,
-                           email=args.email, note=args.note )
+def cmd_add( args, passMgr, safe ):
+    password = handleGenPass( args.gen_pass )
+    success = passMgr.add( name=args.name,
+                           username=args.username,
+                           email=args.email,
+                           note=args.note,
+                           password=password )
     return success, 'Added password for %s' % args.name
 
-def cmd_update( args, passMgr ):
+def cmd_update( args, passMgr, safe ):
     if args.index is None and args.regex_pattern is None:
         print "Must provide --index or --regex for update"
         return False, None
     else:
-        passes = passMgr.getPasswords( index=args.index,
+        passes = passMgr.getIndexedPasswords( index=args.index,
                                        pattern=args.regex_pattern,
                                        searchProps=args.regex_props )
+
+        password = handleGenPass( args.gen_pass )
+
         success = passMgr.update( passes, name=args.name,
                                   username=args.username,
                                   email=args.email,
                                   note=args.note,
-                                  updatePassword=args.password )
+                                  password=password,
+                                  shouldPromptForPassword=args.password )
         return success, None
 
-def cmd_delete( args, passMgr ):
-    return True, None
+def cmd_delete( args, passMgr, safe ):
+    if args.index is None and args.regex_pattern is None:
+        print "Must provide --index or --regex for delete"
+        return False, None
+    else:
+        passes = passMgr.getIndexedPasswords( index=args.index,
+                                       pattern=args.regex_pattern,
+                                       searchProps=args.regex_props )
 
-def cmd_raw_dump( args, passMgr ):
+        success = passMgr.delete( [ i for i, e in passes ] )
+        return success, None
+
+def cmd_dump( args, passMgr, safe ):
+    try:
+        print json.dumps( passMgr.passwords, cls=EntryEncoder, indent=4, separators=( ',', ': ' ) )
+    except ValueError:
+        print safe.rawData
     return False, None
 
 def main():
     argparser = argparse.ArgumentParser( prog='pwds',
             description='Manage passwords in a GPG file.' )
 
-    argparser.add_argument( '--file', '-f', metavar='FILENAME',
+    argparser.add_argument( '--file', '-f', metavar='FILENAME', default=getDefaultFilename(),
                             help='A file to use for storing passwords. Defaults to '
                                  './pwds.safe or ~/.pwds.safe, if they exist, or creates '
                                  './pwds.safe if neither is found.' )
@@ -278,30 +331,49 @@ def main():
     parser_add.set_defaults( func=cmd_add )
 
     parser_update = cmdparser.add_parser( 'update' )
+    addEditParserArgs( parser_update )
+    parser_update.add_argument( '--password', '-p', action='store_true',
+                                help='Change the password' )
+    addSelectParserArgs( parser_update )
     parser_update.set_defaults( func=cmd_update )
 
     parser_delete = cmdparser.add_parser( 'delete' )
+    addSelectParserArgs( parser_delete )
     parser_delete.set_defaults( func=cmd_delete )
 
-    parser_raw = cmdparser.add_parser( 'dump' )
-    parser_raw.set_defaults( func=cmd_raw_dump )
+    parser_dump = cmdparser.add_parser( 'dump' )
+    parser_dump.set_defaults( func=cmd_dump )
 
     args = argparser.parse_args()
 
-    safeFile = getFilename( args.file )
-    passwords, safePass = loadPasswordEntriesAndSafePass( safeFile )
-    passManager = PasswordManager( passwords )
+    if hasattr( args, 'gen_pass' ) and args.gen_pass is None:
+        args.gen_pass = 50
 
-    if hasattr( args, 'regex' ):
-        args.regex_pattern = args.regex[ 0 ] if args.regex is not None else None
-        args.regex_props = args.regex[ 1: ] if args.regex is not None else None
+    try:
+        safe = Safe( args.file )
+        passwords = safe.loadPasswordEntries()
 
-    shouldWrite, writeMsg = args.func( args, passManager )
+        if passwords is None and args.command is not 'dump' and \
+            args.command is not 'show' and not args.raw:
+            print( 'The dafe data could not be parsed. '
+                   'Use the dump command to recover the contents.' )
+            return
 
-    if shouldWrite:
-        writePasswords( passManager.passwords, safeFile, safePass )
-        if writeMsg:
-            print writeMsg
+        passManager = PasswordManager( passwords )
+
+        if hasattr( args, 'regex' ):
+            args.regex_pattern = args.regex[ 0 ] if args.regex is not None else None
+            args.regex_props = args.regex[ 1: ] if args.regex is not None else None
+
+        shouldWrite, writeMsg = args.func( args, passManager, safe )
+
+        if shouldWrite:
+            safe.writePasswords( passManager.passwords )
+            if writeMsg:
+                print writeMsg
+
+    except AuthenticationError as e:
+        print str( e )
 
 if __name__ == '__main__':
     main()

@@ -2,26 +2,26 @@
 
 Script to manage passwords in an encrypted file using gpg.
 
-![screencast gif](https://i.imgur.com/sQoF3VN.gif)
+Passwords can be stored with and searched by a number of attributes, like platform, username, email, notes.
 
 # Installation
 
-    git clone https://github.com/drduh/pwd.sh && cd pwd.sh
-    
-Requires `gpg`
+    git clone https://github.com/tsiemens/pwds && cd pwds
 
-Install with `brew install gpg` or `sudo apt-get install gnupg` or build and install it from [source](https://www.gnupg.org/download/index.html).
+Requires python and pip`
+
+Install python-pip with your package manager, and install with sudo pip install gnupg
 
 # Use
 
-Run the script with `./pwd.sh`
-    
-Type `w` to write a password.
+Run the script with `./pwds`
 
-Type `r` to read a password or all passwords.
+Use `./pwds [ command ] -h` for help.
 
-Type `d` to delete a password.
+`./pwds add [ options ]` to add a new password
 
-The encrypted file `pwd.sh.safe` and script can be safely shared between machines over public channels (Google Drive, Dropbox, etc).
+`./pwds update [ options ]` to change a password
 
-A sample `gpg.conf` configuration file is provided for your consideration.
+`./pwds show [ options ]` to view passwords. They can be searched by property.
+
+The encrypted file pwds.safe`and script can be safely shared between machines over public channels (Google Drive, Dropbox, etc).
