@@ -1,8 +1,12 @@
-# pwd.sh
+# pwds
 
-Script to manage passwords in an encrypted file using gpg.
+Python script to manage passwords in an encrypted file using gpg.
 
 Passwords can be stored with and searched by a number of attributes, like platform, username, email, notes.
+
+Will by default use an encrypted file at ./pwds.safe or ~/.pwds.safe, if either exists.
+
+The encrypted file pwds.safe`and script can be safely shared between machines over public channels (Google Drive, Dropbox, etc).
 
 # Installation
 
@@ -23,5 +27,3 @@ Use `./pwds [ command ] -h` for help.
 `./pwds update [ options ]` to change a password
 
 `./pwds show [ options ]` to view passwords. They can be searched by property.
-
-The encrypted file pwds.safe`and script can be safely shared between machines over public channels (Google Drive, Dropbox, etc).
