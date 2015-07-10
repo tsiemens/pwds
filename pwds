@@ -229,6 +229,17 @@ def handleGenPass( gen_pass_val ):
     else:
         raise ValueError( 'gen-pass value must be > 0 and <= 100' )
 
+def addParser( parser, name ):
+    p = parser.add_parser( name )
+    addGlobalParserArgs( p )
+    return p
+
+def addGlobalParserArgs( parser ):
+    parser.add_argument( '--file', '-f', metavar='FILENAME', default=getDefaultFilename(),
+                         help='A file to use for storing passwords. Defaults to '
+                              './pwds.safe or ~/.pwds.safe, if they exist, or creates '
+                              './pwds.safe if neither is found.' )
+
 def addEditParserArgs( parser ):
     parser.add_argument( '--username', '-u', type=str,
                          help='Provide a username' )
@@ -311,14 +322,11 @@ def main():
     argparser = argparse.ArgumentParser( prog='pwds',
             description='Manage passwords in a GPG file.' )
 
-    argparser.add_argument( '--file', '-f', metavar='FILENAME', default=getDefaultFilename(),
-                            help='A file to use for storing passwords. Defaults to '
-                                 './pwds.safe or ~/.pwds.safe, if they exist, or creates '
-                                 './pwds.safe if neither is found.' )
+    addGlobalParserArgs( argparser )
 
     cmdparser = argparser.add_subparsers( title='command' )
 
-    parser_show = cmdparser.add_parser( 'show' )
+    parser_show = addParser( cmdparser, 'show' )
     addSelectParserArgs( parser_show )
     parser_show.add_argument( '--sort', '-s', type=str, metavar='PROPERTY',
                               help='Sort show output by property name' )
@@ -326,22 +334,22 @@ def main():
                               help='Equivalent to dump command' )
     parser_show.set_defaults( func=cmd_show )
 
-    parser_add = cmdparser.add_parser( 'add' )
+    parser_add = addParser( cmdparser, 'add' )
     addEditParserArgs( parser_add )
     parser_add.set_defaults( func=cmd_add )
 
-    parser_update = cmdparser.add_parser( 'update' )
+    parser_update = addParser( cmdparser, 'update' )
     addEditParserArgs( parser_update )
     parser_update.add_argument( '--password', '-p', action='store_true',
                                 help='Change the password' )
     addSelectParserArgs( parser_update )
     parser_update.set_defaults( func=cmd_update )
 
-    parser_delete = cmdparser.add_parser( 'delete' )
+    parser_delete = addParser( cmdparser, 'delete' )
     addSelectParserArgs( parser_delete )
     parser_delete.set_defaults( func=cmd_delete )
 
-    parser_dump = cmdparser.add_parser( 'dump' )
+    parser_dump = addParser( cmdparser, 'dump' )
     parser_dump.set_defaults( func=cmd_dump )
 
     args = argparser.parse_args()
